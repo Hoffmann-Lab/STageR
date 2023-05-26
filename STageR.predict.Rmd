@@ -1,0 +1,193 @@
+---
+title: "STageR"
+author: "Alena van Bömmel"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+## STageR
+
+Prediction of the aging stage of mouse (early life, midlife, late life) based on DNA methylation in intestine.
+
+Here, we show prediction for the validation data set from Olecka & van Bömmel et al. including the calculation of cluster centroids.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
+library(glmnet)
+library(dplyr)
+library(tidyverse)
+library(tibble)
+library(pheatmap)
+library(ComplexHeatmap)
+library(colortools)
+library(ggplot2)
+
+# colors for plotting
+col.heatmap <- c('#00429e', '#3761ac', '#5682bb', '#73a3c8', '#93c4d6', '#b9e5e3', '#ffffee', '#f3dad5', '#e3b7bc', '#d094a3', '#bc738a', '#a65272', '#90305a')
+
+pal.age = c('#ffe877', '#d2af65', '#a77953', '#7c4540', '#52102d')
+names(pal.age) = c("3M","9M","15M","24M","28M")
+
+pal.age.gr = c('#ffe877', '#a77953', '#52102d')
+names(pal.age.gr) = c("early","mid","late")
+
+```
+
+## Read the data
+
+- cytosines with corresponding cluster (all 19 clusters included)
+- cytosines with methylation values from the validation data set
+- STageR (trained multionomial logistic regression)
+
+Please note: Genomic positions are denoted in the column "co" as a string in the following format: "chr1:4491976".
+
+The validation data set was already intersected with the aDMR-cytosines, such that it contains ~ 70 000 positions. 
+
+
+```{r read data}
+# cytosines with corresponding cluster (all 19 clusters inlcuded)
+clusters <- readRDS("data/clusters.cytosines.rds")
+# read methylation values of the validation data set
+validation.data <- readRDS("data/validation.data.rds")
+# read the STageR classifier
+STageR.fit <- readRDS("data/STageR.glmnet.rds")
+```
+
+## Calculate centroid values per cluster
+
+The calculation is made for all samples (columns) in the data frame with numeric entries. The whole data frame is transposed to have samples in rows and cluster centroids in columns.
+
+The nonlinear clusters C2,C3 and C4 are then selected for prediction with STageR.
+
+```{r centroids}
+gc.medians.clusters <- validation.data %>%
+  left_join(clusters, by=c("co")) %>%
+  dplyr::select(-co) %>%
+  group_by(cluster) %>%
+  dplyr::summarise_if(is.numeric, median, na.rm = TRUE) %>%
+  pivot_longer(cols=c(-cluster),names_to="Samples") %>% # transpose the data frame
+  pivot_wider(names_from=c(cluster)) %>%
+  column_to_rownames("Samples")
+
+gc.medians.clusters.selected <- gc.medians.clusters %>% 
+                                dplyr::select(C2, C3, C4)
+```
+
+## Predict the aging stage using STageR 
+
+```{r predict aging stage}
+predicted.probs <- stats::predict(STageR.fit, newx=as.matrix(gc.medians.clusters.selected), 
+                            s=STageR.fit$lambda.min, type="response")
+```
+
+## Plot the prediction results
+
+Plot the the barplot with predicted probabilities for each sample and show the predicted stage.
+
+The true age of the validation samples is known and can be derived from the sample IDs.
+
+
+```{r plotting results}
+pred.probs <- as.data.frame(predicted.probs[,,1]) %>%
+  rownames_to_column("sample") %>%
+  pivot_longer(cols = c(-sample),
+               names_to = "stage",
+               values_to = "prob") %>%
+  dplyr::mutate(stage = factor(stage, levels = c("late","mid","early"))) %>%
+  dplyr::mutate(age_true = gsub("X","",sample)) %>%
+  dplyr::mutate(age_true = as.numeric(gsub("M_N[0-9]","",age_true))) %>%
+  dplyr::mutate(sample = gsub("X","", sample))
+ 
+
+ggplot(pred.probs, aes(x=reorder(sample, c(age_true)), y=prob, group=stage, fill=stage)) +
+  geom_col(width= 0.7, alpha=0.7,  
+           position=position_stack(0.88)) +
+  scale_fill_manual(values=pal.age.gr, name="Predicted stage")+
+  scale_x_discrete(guide = guide_axis(n.dodge = 1, angle=45, check.overlap=F))+
+  labs(title = "STageR prediction for validation samples") +
+  xlab("Sample") +
+  ylab("Predicted probability") +
+  theme_classic() +
+  theme(legend.position = "bottom",
+        axis.text.y = element_text(size=11),
+        axis.text.x = element_text(size=11),
+        legend.title = element_text(size=12),
+        legend.text = element_text(size=11))
+
+# numbers for the barplot
+pred.probs.table <- pred.probs %>%
+  mutate(prob = round(prob,3)) %>%
+  dplyr::select(-age_true) %>%
+  pivot_wider(names_from = stage,
+              values_from = prob) 
+
+#
+pred.summary <- pred.probs %>%
+  group_by(sample) %>%
+  top_n(1, prob) %>%
+  mutate(stage= factor(stage, levels=c("early","mid","late")))
+print(pred.summary)
+```
+
+## Confusion matrix
+
+Confusion matrix with percentage values and with absolute values.
+
+```{r confusion matrix}
+abs.n <- pred.summary %>% group_by(age_true) %>% tally() # number of samples per age group
+
+conf.mat <- pred.summary %>% 
+  group_by(age_true) %>% dplyr::count(stage) %>%
+  left_join(abs.n, by="age_true", suffix = c("",".abs")) %>%
+  mutate(perc = n/n.abs) %>%
+  dplyr::select(-c(n, n.abs)) %>%
+  pivot_wider(names_from = age_true,
+              values_from = perc,
+              values_fill = 0) %>%
+  column_to_rownames("stage") %>%
+  rename_with(~ paste0(.x, "M"))
+
+age.orig <- data.frame(stage.pred = rownames(conf.mat))
+rownames(age.orig) <- rownames(conf.mat)
+
+age.new = data.frame(age.true = colnames(conf.mat))
+rownames(age.new) <- colnames(conf.mat)
+
+pal.age.new <- c('#ffe877', '#d2af65', '#a77953', '#52102d') 
+names(pal.age.new) <- colnames(conf.mat)
+
+cluster.cols <- list(stage.pred=pal.age.gr, age.true=pal.age.new) 
+
+col.heatmap <- colorRampPalette(colors=c("white","grey30"))(21)
+
+pheatmap::pheatmap(100*as.matrix(conf.mat), 
+                   show_rownames = T, show_colnames = T,
+                   angle_col = "0", fontsize = 14,
+                   cluster_cols = F, cluster_rows = F, 
+                   col = col.heatmap, 
+                   annotation_row = age.orig, annotation_col = age.new,
+                   annotation_colors = cluster.cols, annotation_legend = F,
+                   display_numbers = TRUE, number_format = "%.0f", 
+                   number_color = "white", fontsize_number = 15) 
+
+conf.mat.abs <- pred.summary %>% 
+  group_by(age_true) %>% dplyr::count(stage) %>%
+  pivot_wider(names_from = age_true,
+              values_from = n,
+              values_fill = 0) %>%
+  column_to_rownames("stage") %>%
+  rename_with(~ paste0(.x, "M"))
+
+pheatmap::pheatmap(as.matrix(conf.mat.abs), 
+                   show_rownames = T, show_colnames = T,
+                   angle_col = "0", fontsize = 14,
+                   cluster_cols = F, cluster_rows = F, 
+                   col = col.heatmap, 
+                   annotation_row = age.orig, annotation_col = age.new,
+                   annotation_colors = cluster.cols, annotation_legend = F,
+                   display_numbers = TRUE, number_format = "%.0f", 
+                   number_color = "white", fontsize_number = 15) 
+
+```
+
