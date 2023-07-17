@@ -20,7 +20,7 @@ library(tidyverse)
 library(tibble)
 library(pheatmap)
 library(ComplexHeatmap)
-library(colortools)
+#library(colortools)
 library(ggplot2)
 
 # colors for plotting
