@@ -18,9 +18,7 @@ library(glmnet)
 library(dplyr)
 library(tidyverse)
 library(tibble)
-library(pheatmap)
 library(ComplexHeatmap)
-#library(colortools)
 library(ggplot2)
 
 # colors for plotting

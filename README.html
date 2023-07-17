@@ -358,20 +358,47 @@ pre code {
 </div>
 
 
-<div id="stager" class="section level1">
-<h1>STageR</h1>
+<div id="stager" class="section level2">
+<h2>STageR</h2>
 <p>STage of aging estimatoR: Cluster-based epigenetic clockwise
 classifier predicting the aging stage</p>
+</div>
+<div id="how-to-clone-the-repository" class="section level1">
+<h1>How to clone the repository</h1>
+<p><code>git clone https://github.com/Hoffmann-Lab/STageR</code></p>
+</div>
+<div id="requirements" class="section level1">
+<h1>Requirements</h1>
+<p>R Studio with R and installed the following libraries: glmnet, dplyr,
+tidyverse, tibble, ComplexHeatmap, ggplot2.</p>
+</div>
+<div id="how-to-run-the-scripts" class="section level1">
+<h1>How to run the scripts</h1>
 <p><code>STageR.predict.Rmd</code> predicts the aging stage of mouse
 (early life, midlife, late life) based on DNA methylation in intestine.
 It reads the validation data from Olecka &amp; van Boemmel et al. (2023)
 to show the prediction of the aging stages for 20 samples. The predicted
 probabilities are visualised using a barplot. The confusion matrix
-summarizing all samples in the validation set is also shown.</p>
+summarizing all samples in the validation set is also shown.
+<code>STageR.predict.Rmd</code> runs only few seconds on a standard
+machine.</p>
 <p>You can knit the <code>STageR.predict.Rmd</code> directly in the
 RStudio or run
 <code>Rscript -e &quot;rmarkdown::render(&#39;STageR.predict.Rmd&#39;)&quot;</code> on the
 command line.</p>
+<p>If you want to run the training of the algorithms and calculate the
+results from the cross validation, run the
+<code>STageR.training.Rmd</code>. It reads the matrix with methylation
+values in the CpGs overlapping the clusters, then estimates the final
+model using all samples and run the cross validation procedure. It plots
+the distribution of the estimated coefficients, confusion matrix and the
+model matrix. <code>STageR.training.Rmd</code> with 10 repetition of the
+10-fold CV runs few minutes on a standard machine.</p>
+<p>You can knit the <code>STageR.training.Rmd</code> directly in the
+RStudio or run
+<code>Rscript -e &quot;rmarkdown::render(&#39;STageR.training.Rmd&#39;)&quot;</code> on
+the command line.</p>
+<p>Sessioninfo</p>
 </div>
 
 
