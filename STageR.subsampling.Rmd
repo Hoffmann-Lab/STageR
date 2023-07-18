@@ -1,0 +1,225 @@
+---
+title: "STageR.subsampling"
+author: "Alena van Bömmel"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(glmnet)
+library(dplyr)
+library(tidyverse)
+library(tibble)
+library(pheatmap)
+library(ComplexHeatmap)
+library(circlize)
+library(caret)
+#library(plotmo) # for plotting glmnet coeffs
+library(ggsci)
+
+col.heatmap <- c('#00429e', '#3761ac', '#5682bb', '#73a3c8', '#93c4d6', '#b9e5e3', '#ffffee', '#f3dad5', '#e3b7bc', '#d094a3', '#bc738a', '#a65272', '#90305a')
+
+pal.age = c('#ffe877', '#d2af65', '#a77953', '#7c4540', '#52102d')
+names(pal.age) = c("3M","9M","15M","24M","28M")
+
+pal.age.gr = c('#ffe877', '#a77953', '#52102d')
+names(pal.age.gr) = c("early","mid","late")
+
+plot.dir <- "output"
+```
+
+## Data
+
+- Read the CpG positions within the aDMRs and the corresponding clusters from `clusters.positions.rds`.
+
+- Data matrix with methylation rates of the CpG positions within the aDMRs stored in `methyl.data.rds` 
+
+```{r read data}
+clusters <- readRDS("data/clusters.positions.rds")
+data.mat <- readRDS("data/methyl.data.rds")
+
+# age encoded in the sample labels
+Age <- colnames(data.mat) %>% 
+  str_extract("([:digit:])+M")
+
+# 3 age groups
+age.gr <- factor(case_when(Age=="3M" ~ 'early',
+                          Age=="9M"|Age=="15M" ~ 'mid',
+                          Age=="24M"|Age=="28M" ~ 'late'),levels=c('early','mid','late'))  
+
+```
+
+## Subsampling from the clusters
+
+Subsampling in the test set only
+
+```{r subsampling test set, eval=FALSE}
+### sample nn CpGs from each cluster
+
+### divide the samples in fd folds, then train on the training set using the full data and its median, test on the data using only a subsample (nn) of the CpGs in each cluster, repeat the subsampling N times.
+
+cv.estimation.sampling.test <- function(data.median, data.full, y, 
+                                   sd=sample.int(100,size=1), alpha=0.5,
+                                   nn.seq=c(500,200,100,50,30,20,10,5),N=10, fd = 10){
+  ## the samples on both data matrices must be identical in the same order
+ stopifnot(rownames(data.median) == colnames(data.full)[-c(1:2)])
+   set.seed(sd)
+   sid.early <- createFolds(which(y=="early"), k = fd, list = FALSE, returnTrain = FALSE)
+   sid.mid <- createFolds(which(y=="mid"), k = fd, list = FALSE, returnTrain = FALSE)
+   sid.late <- createFolds(which(y=="late"), k = fd, list = FALSE, returnTrain = FALSE)
+ 
+    
+  a <- alpha
+  results.fd <- list()
+  for (i in 1:fd){
+    test.id <- sort(c(which(y=="early")[sid.early==i], 
+                      which(y=="mid")[sid.mid==i], 
+                      which(y=="late")[sid.late==i]))
+    
+    train.x <- data.median[-test.id,]
+    train.y <- y[-test.id]
+    cv.fit <- cv.glmnet(x=train.x, y=train.y, family="multinomial",
+                        type.measure="class", alpha=a, keep=FALSE,intercept=FALSE)
+   
+     ## sample nn CpGs from the original matrix of the test samples
+    results.nn <- list()
+    for (nn in nn.seq){
+      # repeat each subsampling N times
+      results <- c()
+      for (j in 1:N){
+        data.full.test <- data.full[,c("co","cluster",rownames(data.median)[test.id])] %>%
+          group_by(cluster) %>%
+          sample_n(nn) %>%
+          dplyr::summarise(across(starts_with("int"), ~ median(.x, na.rm = TRUE)))
+        data.cl.test <- t(data.full.test[,-1])
+        colnames(data.cl.test) <- as.character(data.full.test$cluster)
+
+        fitted <- stats::predict(cv.fit, newx=data.cl.test,s="lambda.min",type="response")
+        predicted <- colnames(fitted)[apply(fitted,1, which.max)]
+        true <- y[test.id]
+        results <- results %>%
+          bind_rows(bind_cols(predicted=predicted, true=as.character(true), round = rep(j, length(predicted))))
+        }
+      results.nn[[paste0(nn,"N")]] <- results
+    }
+    results.fd[[i]] <- results.nn
+    }
+  
+  return(results.fd)
+}
+
+sel.clusters <- c("c2", "c3", "c4")
+data.mat <- data.cl[, sel.clusters]
+
+results.subsampling <- cv.estimation.sampling.test(data.median=data.mat, 
+                       data.full=data %>% dplyr::filter(cluster %in% sel.clusters), 
+                       y = age.gr, 
+                       sd = 19, alpha=0.5,
+                       nn.seq=c(2000,1000,500,200,100,50,30,10,5), N=10, fd = 10)
+
+saveRDS(results.subsampling, "results.subsampling.STageR.test.final.rds")
+```
+
+## Plot the subsampling results
+
+```{r plot subsampling, eval=FALSE}
+
+get.error <- function(res){
+    res.err <- res %>%
+    group_by(round) %>%
+    summarise(err = get.misclass(predicted,true))
+    return(res.err)
+}  
+
+results.subsampling <- readRDS("results.subsampling.STageR.test.final.rds")
+ err.fd <- c()
+for (i in 1:length(results.subsampling)){
+  res.fd <- results.subsampling[[i]]
+
+  for (l in 1:length(res.fd)){
+    err.fd <- err.fd %>%
+      bind_rows(data.frame(get.error(res.fd[[l]]), no.cs = rep(names(res.fd)[l],max(res.fd[[l]]$round))))
+  }
+}  
+ 
+ err.fd <- err.fd %>%
+   mutate(no.cs.N = factor(gsub("N","",no.cs), levels=c("2000","1000","500","200","100","50","30","10","5")))
+
+ggplot(err.fd, aes(x=no.cs.N, y=err, fill = no.cs.N)) +
+  geom_boxplot() +
+   scale_fill_manual(values=c('#000000', '#1e1e1e', '#353535', '#4e4e4e', '#696969', '#858585', '#a2a2a2', '#c0c0c0', '#dfdfdf'),guide=NULL) +
+                     #c('#383838','#535353', '#6f6f6f', '#8c8c8c', '#ababab', '#ebebeb'),guide = NULL)+
+    labs(y ="Misclassification error",
+         x="Sampled CpGs per cluster")+
+    theme_classic()+
+    theme(axis.text.x = element_text(size = 12),
+      axis.text.y = element_text(size = 12),
+      axis.title.y = element_text(size=13),
+      axis.title.x = element_text(size=13))
+ 
+# median values
+err.fd %>%
+  group_by(no.cs.N) %>%
+  dplyr::summarize(median.err = median(err), mean.err = mean(err))
+  
+m.err <- cbind(m.err,(sapply(results.subsampling[[1]], function(x) get.misclass(x[,1],x[,2]))))
+
+
+get.df <- function(mat, n.sampl){
+  df.long <- as.data.frame(mat) %>%
+    dplyr::mutate(cv = 1:nrow(mat)) %>%
+    pivot_longer(cols = -cv,
+                 names_to = "round",
+                values_to = "error") %>%
+    dplyr::mutate(N.sampl = n.sampl)
+  return(df.long)
+}
+
+all.errors <- data.frame()
+
+for (i in 1:length(m.err.ls)){
+  all.errors <-rbind(all.errors, get.df(m.err.ls[[i]], names(m.err.ls)[i]))
+} 
+
+m.err.ls <- readRDS(file.path("subsampling.50.20.CpGs.CV.errors.allclusters.age.gr.5.alpha0.5.rds"))
+
+for (i in 1:length(m.err.ls)){
+  all.errors <-rbind(all.errors, get.df(m.err.ls[[i]], names(m.err.ls)[i]))
+}
+
+m.err.ls <- readRDS(file.path("subsampling.10.5.CpGs.CV.errors.allclusters.age.gr.5.alpha0.5.rds"))
+
+for (i in 1:length(m.err.ls)){
+  all.errors <-rbind(all.errors, get.df(m.err.ls[[i]], names(m.err.ls)[i]))
+}
+
+
+all.errors <- all.errors %>%
+  mutate(N.sampl = factor(N.sampl,levels=c("500","200","100","50","20","10","5")))
+
+ggplot(all.errors, aes(x=N.sampl, y=error, fill = N.sampl)) +
+  geom_boxplot() +
+   scale_fill_manual(values=c('#383838','#535353', '#6f6f6f', '#8c8c8c', '#ababab', '#8c8c8c', '#ebebeb'), # '#cacaca'
+                     labels = c("500","200","100","50","20","10","5"), 
+                     guide = NULL)+
+    labs(y ="Misclassification error",x="")+
+    theme_classic()+
+    theme(axis.text.x = element_text(size = 12),
+      axis.text.y = element_text(size = 12),
+      axis.title.y = element_text(size=13))
+
+
+all.errors %>%
+  dplyr::filter(N.sampl == "10") %>% 
+  dplyr::summarise(sum = fivenum(error)) 
+#  dplyr::summarise(q = quantile(error, 0.8))
+
+all.errors %>%
+  dplyr::filter(N.sampl == "5") %>% 
+  dplyr::summarise(sum = fivenum(error)) 
+
+
+```
+

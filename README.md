@@ -8,8 +8,8 @@ STage of aging estimatoR: Cluster-based epigenetic clockwise classifier predicti
 
 # Requirements
 
-R version 4.2.2 (2022-10-31) 
-Install the following libraries: glmnet v4.1-7, dplyr v1.1.2, tidyverse v2.0.0 , tibble v3.2.1, ComplexHeatmap v2.14.0, ggplot2 v3.4.2.
+The code was run using `R` version 4.2.2 (2022-10-31) but will very likely work with other versions of `R`.
+The following libraries has to be installed (the version used for our run is stated in the brackets): `glmnet` (v4.1-7), `dplyr` (v1.1.2), `tidyverse` (v2.0.0) , `tibble` (v3.2.1), `ComplexHeatmap` (v2.14.0), `ggplot2` (v3.4.2).
 
 
 # How to run the scripts
@@ -25,6 +25,3 @@ You can knit the `STageR.training.Rmd` directly in the RStudio or run
 `Rscript -e "rmarkdown::render('STageR.training.Rmd')"` on the command line.
 
 
-
-
-Sessioninfo
